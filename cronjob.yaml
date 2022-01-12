@@ -1,0 +1,79 @@
+apiVersion: batch/v1beta1
+kind: CronJob
+metadata:
+  name: etcd-backup
+  namespace: kube-system
+spec:
+  schedule: "0 0 * * *"
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      # Job timeout
+      # activeDeadlineSeconds: 300
+      template:
+        spec:
+          tolerations:
+          # Tolerate master taint
+          - key: node-role.kubernetes.io/master
+            operator: Exists
+            effect: NoSchedule
+          # Container creates etcd backups.
+          # Run container in host network mode on G8s masters
+          # to be able to use 127.0.0.1 as etcd address.
+          # For etcd v2 backups container should have access
+          # to etcd data directory. To achive that,
+          # mount /var/lib/etcd3 as a volume.
+          nodeSelector:
+            node-role.kubernetes.io/master: ""
+          containers:
+          - name: etcd-backup
+            image: dharmendrakariya/etcd:13.0.0
+            args:
+            - firsttry_db # databse name prefix
+            - https://x.x.x.x:2379 ## give the etcd pod address 
+            volumeMounts:
+            - mountPath: /var/lib/etcd
+              name: etcd-datadir
+            - mountPath: /certs
+              name: etcd-certs
+            env:
+              - name: MINIO_SERVER
+                value: http://console.domain.com #minio console address
+              - name: MINIO_BUCKET
+                value: etcd # bucket name
+              - name: MINIO_API_VERSION
+                value: S3v4
+              - name: MINIO_ACCESS_KEY
+                valueFrom:
+                  secretKeyRef:
+                    name: etcd-backup
+                    key: MINIO_ACCESS_KEY
+              - name: MINIO_SECRET_KEY
+                valueFrom:
+                  secretKeyRef:
+                    name: etcd-backup
+                    key: MINIO_SECRET_KEY
+              
+          volumes:
+          - name: etcd-datadir
+            hostPath:
+              path: /var/lib/etcd
+          - name: etcd-certs
+            hostPath:
+              path: /etc/kubernetes/pki/etcd/
+          # Do not restart pod, job takes care on restarting failed pod.
+          restartPolicy: Never
+          hostNetwork: true #incase if you want to pickup from 127.0.0.1 (local address)
+
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: etcd-backup
+  namespace: kube-system
+type: Opaque
+data:
+  MINIO_ACCESS_KEY: "Y29uc29sZQ=="
+  MINIO_SECRET_KEY: "Y29uc29sZTEyMw=="
